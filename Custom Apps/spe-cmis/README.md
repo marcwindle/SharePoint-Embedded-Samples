@@ -131,7 +131,6 @@ src/
 docs/
   SETUP_AZURE.md                    # End-to-end Entra app + Container Type setup
   CONNECT_OPENCMIS_WORKBENCH.md     # Using the OpenCMIS Workbench reference client
-  CMIS_ENDPOINTS_AND_TESTING.md     # Internal dev log: endpoint inventory + bugs found during development
 tests/
   cmis_client.py         # Python test client (Browser Binding via cmislib)
   test_gaps.py            # Regression pass: type defs, query, ACL, versioning
@@ -145,5 +144,4 @@ Repository listing/info, object CRUD (create/read/update/delete/move), folder br
 `objectId`), content up/download, query (a practical SQL-92 subset), type definitions, ACL
 discover/manage, and versioning (checkOut/checkIn/cancelCheckOut). Relationships, policies, and
 multi-filing are **not** implemented — SPE's single-parent-folder data model has no equivalent for
-them. See [docs/CMIS_ENDPOINTS_AND_TESTING.md](docs/CMIS_ENDPOINTS_AND_TESTING.md) for the detailed
-endpoint inventory.
+them.

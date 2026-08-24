@@ -13,7 +13,7 @@ info:
     Endpoints or actions tagged with `x-mvp: false` are NOT part of the initial MVP
     and may return a CMIS-compliant "notSupported" error until implemented.
 
-    TODO (Spec Finalization Checklist):
+    Spec finalization checklist (all items complete):
       [x] Container Type included in server path (before /cmis/browser)
       [x] Explicit repositoryId contract documented
       [x] Repository discovery paging & filtering defined

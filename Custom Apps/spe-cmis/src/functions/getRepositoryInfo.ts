@@ -15,7 +15,16 @@ import {
     getBaseTypeDefinition,
     executeCmisQuery,
     parseMultipartForm,
+    isValidGuid,
+    isValidRepositoryId,
+    parseBoundedInt,
 } from "../lib";
+
+/** Repository-level query statements beyond this length are rejected outright. */
+const MAX_QUERY_STATEMENT_LENGTH = 4000;
+
+/** Known repository-level cmisactions (only 'query' is implemented). */
+const SUPPORTED_REPOSITORY_ACTIONS = new Set(['query']);
 
 /**
  * CMIS Browser Binding: Get Repository Info
@@ -51,9 +60,19 @@ export async function getRepositoryInfo(
         return permissionDenied('Container type ID is required');
     }
 
+    if (!isValidGuid(containerTypeId)) {
+        context.log(`Invalid containerTypeId format: ${containerTypeId}`);
+        return invalidArgument('Container type ID must be a valid GUID');
+    }
+
     if (!repositoryId) {
         context.log('Missing repositoryId in route');
         return objectNotFound('Repository ID is required');
+    }
+
+    if (!isValidRepositoryId(repositoryId)) {
+        context.log(`Invalid repositoryId format: ${repositoryId}`);
+        return invalidArgument('Repository ID has an invalid format');
     }
 
     try {
@@ -185,6 +204,10 @@ async function postRepositoryInfo(
         return objectNotFound('Repository ID is required');
     }
 
+    if (!isValidRepositoryId(repositoryId)) {
+        return invalidArgument('Repository ID has an invalid format');
+    }
+
     let cmisaction: string | null = request.query.get('cmisaction');
     const formData = new Map<string, string>();
 
@@ -206,15 +229,26 @@ async function postRepositoryInfo(
         return invalidArgument('cmisaction is required');
     }
 
+    if (!SUPPORTED_REPOSITORY_ACTIONS.has(cmisaction)) {
+        context.log(`Repository-level cmisaction=${cmisaction} is not supported`);
+        return notSupported(`Repository-level action '${cmisaction}' is not supported`);
+    }
+
     if (cmisaction === 'query') {
         // OASIS spec field is 'q'; some clients (e.g. OpenCMIS Workbench) send 'statement' instead.
         const statement = formData.get('q') || formData.get('statement') || request.query.get('q') || request.query.get('statement');
         if (!statement) {
             return invalidArgument("'q' (the query statement) is required");
         }
+        if (statement.length > MAX_QUERY_STATEMENT_LENGTH) {
+            return invalidArgument(`Query statement exceeds maximum length of ${MAX_QUERY_STATEMENT_LENGTH} characters`);
+        }
 
-        const maxItems = parseInt(formData.get('maxItems') || request.query.get('maxItems') || '100', 10);
-        const skipCount = parseInt(formData.get('skipCount') || request.query.get('skipCount') || '0', 10);
+        const maxItems = parseBoundedInt(formData.get('maxItems') || request.query.get('maxItems'), 100, 1000);
+        const skipCount = parseBoundedInt(formData.get('skipCount') || request.query.get('skipCount'), 0);
+        if (maxItems === undefined || skipCount === undefined) {
+            return invalidArgument('maxItems and skipCount must be non-negative integers');
+        }
 
         const result = await executeCmisQuery(
             statement,
@@ -235,7 +269,7 @@ async function postRepositoryInfo(
         };
     }
 
-    context.log(`Repository-level cmisaction=${cmisaction} is not supported`);
+    // Unreachable: SUPPORTED_REPOSITORY_ACTIONS currently only contains 'query'.
     return notSupported(`Repository-level action '${cmisaction}' is not supported`);
 }
 

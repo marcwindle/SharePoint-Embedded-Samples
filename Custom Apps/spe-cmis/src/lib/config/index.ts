@@ -8,6 +8,8 @@ export interface AppConfig {
     clientId: string;
     /** Azure AD client secret for app-only auth */
     clientSecret: string;
+    /** Azure AD tenant ID, or 'organizations' for multi-tenant work/school accounts */
+    tenantId: string;
 }
 
 /**
@@ -27,6 +29,7 @@ export function loadConfig(): AppConfig {
     return {
         clientId,
         clientSecret,
+        tenantId: process.env.AZURE_TENANT_ID || 'organizations',
     };
 }
 

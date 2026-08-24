@@ -29,6 +29,9 @@ import {
     handleCheckInAction,
     handleApplyAclAction,
     fetchObjectAcl,
+    isValidGuid,
+    isValidRepositoryId,
+    parseBoundedInt,
 } from "../lib";
 
 /**
@@ -70,6 +73,14 @@ export async function objectByPath(
 
     if (!containerTypeId || !repositoryId) {
         return invalidArgument('Container type ID and repository ID are required');
+    }
+
+    if (!isValidGuid(containerTypeId)) {
+        return invalidArgument('Container type ID must be a valid GUID');
+    }
+
+    if (!isValidRepositoryId(repositoryId)) {
+        return invalidArgument('Repository ID has an invalid format');
     }
 
     // Verify the repository exists and belongs to the container type
@@ -199,8 +210,11 @@ async function handleGetChildrenById(
     succinct: boolean,
     includeAllowableActions: boolean
 ): Promise<HttpResponseInit> {
-    const maxItems = parseInt(request.query.get('maxItems') || '100', 10);
-    const skipCount = parseInt(request.query.get('skipCount') || '0', 10);
+    const maxItems = parseBoundedInt(request.query.get('maxItems'), 100, 1000);
+    const skipCount = parseBoundedInt(request.query.get('skipCount'), 0);
+    if (maxItems === undefined || skipCount === undefined) {
+        return invalidArgument('maxItems and skipCount must be non-negative integers');
+    }
 
     const result = await listChildren(accessToken, repositoryId, objectId, maxItems, skipCount);
 
@@ -315,8 +329,11 @@ async function handleGetChildren(
     succinct: boolean,
     includeAllowableActions: boolean
 ): Promise<HttpResponseInit> {
-    const maxItems = parseInt(request.query.get('maxItems') || '100', 10);
-    const skipCount = parseInt(request.query.get('skipCount') || '0', 10);
+    const maxItems = parseBoundedInt(request.query.get('maxItems'), 100, 1000);
+    const skipCount = parseBoundedInt(request.query.get('skipCount'), 0);
+    if (maxItems === undefined || skipCount === undefined) {
+        return invalidArgument('maxItems and skipCount must be non-negative integers');
+    }
 
     const result = await listChildrenByPath(accessToken, repositoryId, path, maxItems, skipCount);
 

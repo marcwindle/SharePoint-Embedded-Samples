@@ -59,8 +59,8 @@ function getMsalClient(): ConfidentialClientApplication {
             auth: {
                 clientId: config.clientId,
                 clientSecret: config.clientSecret,
-                // Use 'organizations' for multi-tenant apps supporting only work/school accounts
-                authority: 'https://login.microsoftonline.com/organizations',
+                // Defaults to 'organizations' for multi-tenant apps supporting only work/school accounts
+                authority: `https://login.microsoftonline.com/${config.tenantId}`,
             },
         };
 

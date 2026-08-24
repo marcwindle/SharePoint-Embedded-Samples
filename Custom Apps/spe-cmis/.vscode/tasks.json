@@ -8,9 +8,11 @@
 			"problemMatcher": "$func-node-watch",
 			"isBackground": true,
 			"dependsOn": "npm watch (functions)",
-			"options": {
-				"env": {
-					"PATH": "${env:USERPROFILE}\\AppData\\Roaming\\npm;${env:PATH}"
+			"windows": {
+				"options": {
+					"env": {
+						"PATH": "${env:USERPROFILE}\\AppData\\Roaming\\npm;${env:PATH}"
+					}
 				}
 			}
 		},

@@ -6,7 +6,9 @@ import {
     filterContainersByName,
     unauthorized,
     permissionDenied,
+    invalidArgument,
     runtimeError,
+    isValidGuid,
     GetRepositoriesParams,
 } from "../lib";
 
@@ -48,6 +50,11 @@ export async function getRepositories(
     if (!containerTypeId) {
         context.log('Missing containerTypeId in route');
         return permissionDenied('Container type ID is required');
+    }
+
+    if (!isValidGuid(containerTypeId)) {
+        context.log(`Invalid containerTypeId format: ${containerTypeId}`);
+        return invalidArgument('Container type ID must be a valid GUID');
     }
 
     // Parse query parameters

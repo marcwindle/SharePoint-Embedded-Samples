@@ -83,8 +83,15 @@ export function parseBasicAuth(request: HttpRequest): { username: string; passwo
     try {
         const base64Credentials = authHeader.slice(6);
         const credentials = Buffer.from(base64Credentials, 'base64').toString('utf-8');
-        const [username, password] = credentials.split(':');
-        
+        // Split on the FIRST colon only - RFC 7617 permits ':' in the
+        // password, so splitting on every colon would silently truncate it.
+        const separatorIndex = credentials.indexOf(':');
+        if (separatorIndex === -1) {
+            return null;
+        }
+        const username = credentials.slice(0, separatorIndex);
+        const password = credentials.slice(separatorIndex + 1);
+
         if (!username || !password) {
             return null;
         }

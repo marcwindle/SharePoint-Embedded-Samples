@@ -84,6 +84,38 @@ function matchesNameFilter(name: string, filter?: ParsedQuery['nameFilter']): bo
 }
 
 /**
+ * Fetches ALL children of a folder, following `@odata.nextLink`
+ * continuation pages. A single listChildren(top=999) call only returns the
+ * first page - folders with more than 999 children would otherwise be
+ * silently truncated, dropping items (and nested folders, breaking the
+ * tree walk) from query results.
+ */
+async function listAllChildren(
+    accessToken: string,
+    repositoryId: string,
+    folderId: string
+): Promise<DriveItem[]> {
+    const pageSize = 999;
+    const all: DriveItem[] = [];
+    let skip = 0;
+
+    while (true) {
+        const result = await listChildren(accessToken, repositoryId, folderId, pageSize, skip);
+        if (!result.success) {
+            break;
+        }
+        const items = result.data?.value || [];
+        all.push(...items);
+        if (items.length < pageSize || !result.data?.['@odata.nextLink']) {
+            break;
+        }
+        skip += pageSize;
+    }
+
+    return all;
+}
+
+/**
  * Executes a query statement against the repository, recursively walking
  * the folder tree from the root.
  */
@@ -110,14 +142,9 @@ export async function executeCmisQuery(
         }
         visited.add(folderId);
 
-        const result = await listChildren(accessToken, repositoryId, folderId, 999, 0);
-        if (!result.success) {
-            // Best-effort tree walk: skip folders we can't read rather than
-            // failing the whole query.
-            continue;
-        }
+        const children = await listAllChildren(accessToken, repositoryId, folderId);
 
-        for (const item of result.data?.value || []) {
+        for (const item of children) {
             const isFolder = !!item.folder;
             const typeMatches = parsed.typeId === null || (parsed.typeId === 'cmis:folder') === isFolder;
             if (typeMatches && matchesNameFilter(item.name || '', parsed.nameFilter)) {

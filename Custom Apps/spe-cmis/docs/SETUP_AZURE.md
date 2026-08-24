@@ -32,6 +32,27 @@ one-time setup steps below) the app used to create/register the Container Type.
 > You can remove the two temporary permissions again after setup if you prefer to keep the app's
 > standing permissions minimal — they're only used once, during steps 2 and 3 below.
 
+### Expose an API (required for Bearer/MFA-compatible auth)
+
+The Basic Auth (ROPC) flow above doesn't work for accounts with MFA or Conditional Access policies
+(see Troubleshooting). To use `scripts/get-bearer-token.js` (or any interactive/Bearer-token client)
+instead, the app needs a delegated scope to request a token against:
+
+1. **Expose an API** → **Add** next to **Application ID URI** → accept the default
+   (`api://<Application (client) ID>`) → **Save**.
+2. **Add a scope**:
+   - **Scope name**: `access_as_user`
+   - **Who can consent**: Admins and users
+   - **Admin consent display name / description**: e.g. "Access spe-cmis as the signed-in user"
+   - **User consent display name / description**: same
+   - **State**: Enabled
+3. Under **Authorized client applications**, you can pre-authorize a public client (e.g. a CLI/test
+   script's own client ID) to skip the consent prompt, or just consent interactively the first time
+   `get-bearer-token.js` runs.
+
+Without this step, `scripts/get-bearer-token.js` (and any Bearer-token client) fails with an
+invalid-scope error, since it requests `api://<Application (client) ID>/access_as_user`.
+
 ## 2. Create a Container Type
 
 **Recommended — SharePoint Embedded VS Code extension** (GUI, no manual Graph calls):

@@ -17,8 +17,10 @@ def main():
     repo_info = find_repository_by_name(client, repositories, config['container_name'])
     if not repo_info:
         print("Repository not found, aborting.")
-        return
+        sys.exit(1)
     repo = repo_info
+
+    failures = []
 
     print("\n" + "=" * 60)
     print("1. Type Definitions")
@@ -39,6 +41,7 @@ def main():
     except Exception as e:
         print(f"FAILED: {e}")
         traceback.print_exc()
+        failures.append('Type Definitions')
 
     print("\n" + "=" * 60)
     print("2. Query")
@@ -52,6 +55,7 @@ def main():
     except Exception as e:
         print(f"FAILED: {e}")
         traceback.print_exc()
+        failures.append('Query')
 
     print("\n" + "=" * 60)
     print("3. ACL discover + manage")
@@ -74,6 +78,7 @@ def main():
     except Exception as e:
         print(f"FAILED: {e}")
         traceback.print_exc()
+        failures.append('ACL discover + manage')
 
     print("\n" + "=" * 60)
     print("4. Versioning (checkOut/checkIn/cancelCheckOut)")
@@ -94,6 +99,7 @@ def main():
     except Exception as e:
         print(f"FAILED: {e}")
         traceback.print_exc()
+        failures.append('Versioning')
 
     print("\n" + "=" * 60)
     print("Cleanup")
@@ -118,6 +124,14 @@ def main():
                 print(f"Deleted {child.getName()}")
     except Exception as e:
         print(f"Cleanup docs failed: {e}")
+
+    print("\n" + "=" * 60)
+    if failures:
+        print(f"RESULT: FAILED ({len(failures)}/4 checks): {', '.join(failures)}")
+        print("=" * 60)
+        sys.exit(1)
+    print("RESULT: PASSED (4/4 checks)")
+    print("=" * 60)
 
 
 if __name__ == '__main__':

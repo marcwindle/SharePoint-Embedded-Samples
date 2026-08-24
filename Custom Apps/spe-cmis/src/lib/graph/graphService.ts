@@ -12,6 +12,7 @@
 
 import { Client } from '@microsoft/microsoft-graph-client';
 import type { FileStorageContainer } from '@microsoft/microsoft-graph-types';
+import { isValidGuid } from '../http/validation';
 
 /**
  * Creates a Microsoft Graph client instance with the provided access token.
@@ -61,6 +62,21 @@ export async function getContainers(
     skip?: number,
     top?: number
 ): Promise<GraphResult<GraphCollection<FileStorageContainer>>> {
+    // Defense-in-depth: containerTypeId is interpolated directly into an
+    // OData $filter expression below. Callers are expected to validate this
+    // as a GUID first, but a strict check here prevents any caller from
+    // ever being able to inject OData operators into the filter.
+    if (!isValidGuid(containerTypeId)) {
+        return {
+            success: false,
+            error: {
+                code: 'invalidArgument',
+                message: 'containerTypeId must be a valid GUID',
+            },
+            statusCode: 400,
+        };
+    }
+
     try {
         const client = createGraphClient(accessToken);
         
@@ -76,11 +92,26 @@ export async function getContainers(
             request = request.top(top);
         }
 
-        const response = await request.get();
+        let response = await request.get() as GraphCollection<FileStorageContainer>;
+
+        // When the caller isn't requesting a specific page (no explicit
+        // `top`), follow all continuation pages so the full result set is
+        // returned - Graph pages container listings even without $top,
+        // and silently returning only the first page would omit containers.
+        if (top === undefined) {
+            const allValues = response.value ? [...response.value] : [];
+            let nextLink = response['@odata.nextLink'];
+            while (nextLink) {
+                const page = await client.api(nextLink).get() as GraphCollection<FileStorageContainer>;
+                allValues.push(...(page.value || []));
+                nextLink = page['@odata.nextLink'];
+            }
+            response = { ...response, value: allValues, '@odata.nextLink': undefined };
+        }
 
         return {
             success: true,
-            data: response as GraphCollection<FileStorageContainer>,
+            data: response,
         };
     } catch (error: unknown) {
         const graphError = error as { statusCode?: number; code?: string; message?: string };

@@ -94,6 +94,14 @@ export function constraintViolation(message = 'Constraint violation'): HttpRespo
 }
 
 /**
+ * Creates a versioning error response (e.g. check-in attempted on an object
+ * that isn't checked out)
+ */
+export function versioningError(message = 'Versioning error'): HttpResponseInit {
+    return cmisErrorResponse('versioning', message);
+}
+
+/**
  * Creates a runtime error response
  */
 export function runtimeError(message = 'Internal server error'): HttpResponseInit {

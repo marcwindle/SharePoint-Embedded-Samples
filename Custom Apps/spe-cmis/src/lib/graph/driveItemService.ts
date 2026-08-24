@@ -19,6 +19,14 @@ import { createGraphClient, GraphResult, GraphCollection } from './graphService'
 const driveIdCache = new Map<string, string>();
 
 /**
+ * Fields selected on DriveItem reads. Explicit so that `publication` (the
+ * checkout/checked-in state facet, used to reflect real versioning state in
+ * objectMapper.ts) is included - Graph omits it unless requested.
+ */
+const DRIVE_ITEM_SELECT =
+    'id,name,size,file,folder,parentReference,createdBy,createdDateTime,lastModifiedBy,lastModifiedDateTime,eTag,publication';
+
+/**
  * Gets the drive ID for a container.
  * Uses caching to avoid repeated lookups.
  */
@@ -54,6 +62,7 @@ export async function getDriveRoot(
         
         const response = await client
             .api(`/drives/${driveId}/root`)
+            .select(DRIVE_ITEM_SELECT)
             .get();
 
         return {
@@ -85,6 +94,7 @@ export async function getDriveItem(
         
         const response = await client
             .api(endpoint)
+            .select(DRIVE_ITEM_SELECT)
             .get();
 
         return {
@@ -114,6 +124,7 @@ export async function getDriveItemByPath(
         if (!path || path === '' || path === '/') {
             const response = await client
                 .api(`/drives/${driveId}/root`)
+                .select(DRIVE_ITEM_SELECT)
                 .get();
             return {
                 success: true,
@@ -126,6 +137,7 @@ export async function getDriveItemByPath(
         
         const response = await client
             .api(`/drives/${driveId}/root:${normalizedPath}`)
+            .select(DRIVE_ITEM_SELECT)
             .get();
 
         return {
@@ -161,7 +173,7 @@ export async function listChildren(
             ? `/drives/${driveId}/root/children`
             : `/drives/${driveId}/items/${itemId}/children`;
         
-        let request = client.api(endpoint);
+        let request = client.api(endpoint).select(DRIVE_ITEM_SELECT);
 
         if (top !== undefined && top > 0) {
             request = request.top(top);
@@ -206,7 +218,7 @@ export async function listChildrenByPath(
             endpoint = `/drives/${driveId}/root:${normalizedPath}:/children`;
         }
         
-        let request = client.api(endpoint);
+        let request = client.api(endpoint).select(DRIVE_ITEM_SELECT);
 
         if (top !== undefined && top > 0) {
             request = request.top(top);
@@ -293,9 +305,12 @@ export async function createFile(
         // Use PUT to upload file content directly
         // For root: /drives/{driveId}/root:/{filename}:/content
         // For other folders: /drives/{driveId}/items/{parent-id}:/{filename}:/content
+        // @microsoft.graph.conflictBehavior=fail ensures a name collision
+        // surfaces as an error instead of silently replacing the existing
+        // file's content (Graph's default PUT behavior is to overwrite).
         const endpoint = parentId === 'root'
-            ? `/drives/${driveId}/root:/${encodeURIComponent(name)}:/content`
-            : `/drives/${driveId}/items/${parentId}:/${encodeURIComponent(name)}:/content`;
+            ? `/drives/${driveId}/root:/${encodeURIComponent(name)}:/content?@microsoft.graph.conflictBehavior=fail`
+            : `/drives/${driveId}/items/${parentId}:/${encodeURIComponent(name)}:/content?@microsoft.graph.conflictBehavior=fail`;
         
         const response = await client
             .api(endpoint)

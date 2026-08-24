@@ -31,10 +31,34 @@ function createProperty(
 }
 
 /**
+ * Derives whether a document's version series is currently checked out from
+ * Graph's `publication` facet (populated when the DriveItem read explicitly
+ * selects it - see DRIVE_ITEM_SELECT in driveItemService.ts). Falls back to
+ * `false` when the facet isn't present rather than assuming checked out.
+ */
+function isCheckedOut(item: DriveItem): boolean {
+    return item.publication?.level === 'checkout';
+}
+
+/**
+ * Derives a version label from Graph's publication facet when available,
+ * falling back to '1.0' since this adapter doesn't track a full version
+ * history.
+ */
+function getVersionLabel(item: DriveItem): string {
+    return item.publication?.versionId || '1.0';
+}
+
+/**
  * Maps a DriveItem to CMIS full properties format.
  * Full format: property ID -> PropertyData object with metadata.
+ *
+ * @param item - The DriveItem to map
+ * @param isRoot - True when this item is the repository's root folder; used
+ * to report the CMIS-required root path of '/' instead of the Graph item's
+ * own name-derived path.
  */
-export function mapDriveItemToProperties(item: DriveItem): Record<string, PropertyData> {
+export function mapDriveItemToProperties(item: DriveItem, isRoot: boolean = false): Record<string, PropertyData> {
     const isFolder = !!item.folder;
     const baseTypeId = isFolder ? CMIS_TYPE_FOLDER : CMIS_TYPE_DOCUMENT;
 
@@ -52,9 +76,11 @@ export function mapDriveItemToProperties(item: DriveItem): Record<string, Proper
 
     if (isFolder) {
         // Folder-specific properties
-        const path = item.parentReference?.path 
-            ? `${item.parentReference.path.replace(/^\/drive\/root:?/, '')}/${item.name}`
-            : `/${item.name}`;
+        const path = isRoot
+            ? '/'
+            : item.parentReference?.path
+                ? `${item.parentReference.path.replace(/^\/drive\/root:?/, '')}/${item.name}`
+                : `/${item.name}`;
         props['cmis:path'] = createProperty('cmis:path', 'string', path);
     } else {
         // Document-specific properties
@@ -65,8 +91,8 @@ export function mapDriveItemToProperties(item: DriveItem): Record<string, Proper
         props['cmis:isLatestVersion'] = createProperty('cmis:isLatestVersion', 'boolean', true);
         props['cmis:isMajorVersion'] = createProperty('cmis:isMajorVersion', 'boolean', true);
         props['cmis:isLatestMajorVersion'] = createProperty('cmis:isLatestMajorVersion', 'boolean', true);
-        props['cmis:versionLabel'] = createProperty('cmis:versionLabel', 'string', '1.0');
-        props['cmis:isVersionSeriesCheckedOut'] = createProperty('cmis:isVersionSeriesCheckedOut', 'boolean', false);
+        props['cmis:versionLabel'] = createProperty('cmis:versionLabel', 'string', getVersionLabel(item));
+        props['cmis:isVersionSeriesCheckedOut'] = createProperty('cmis:isVersionSeriesCheckedOut', 'boolean', isCheckedOut(item));
     }
 
     // Parent folder ID
@@ -80,8 +106,11 @@ export function mapDriveItemToProperties(item: DriveItem): Record<string, Proper
 /**
  * Maps a DriveItem to CMIS succinct properties format.
  * Succinct format: property ID -> value directly (no metadata).
+ *
+ * @param item - The DriveItem to map
+ * @param isRoot - True when this item is the repository's root folder.
  */
-export function mapDriveItemToSuccinctProperties(item: DriveItem): SuccinctProperties {
+export function mapDriveItemToSuccinctProperties(item: DriveItem, isRoot: boolean = false): SuccinctProperties {
     const isFolder = !!item.folder;
     const baseTypeId = isFolder ? CMIS_TYPE_FOLDER : CMIS_TYPE_DOCUMENT;
 
@@ -99,9 +128,11 @@ export function mapDriveItemToSuccinctProperties(item: DriveItem): SuccinctPrope
 
     if (isFolder) {
         // Folder-specific properties
-        props['cmis:path'] = item.parentReference?.path 
-            ? `${item.parentReference.path.replace(/^\/drive\/root:?/, '')}/${item.name}`
-            : `/${item.name}`;
+        props['cmis:path'] = isRoot
+            ? '/'
+            : item.parentReference?.path
+                ? `${item.parentReference.path.replace(/^\/drive\/root:?/, '')}/${item.name}`
+                : `/${item.name}`;
     } else {
         // Document-specific properties
         props['cmis:contentStreamLength'] = item.size || 0;
@@ -111,8 +142,8 @@ export function mapDriveItemToSuccinctProperties(item: DriveItem): SuccinctPrope
         props['cmis:isLatestVersion'] = true;
         props['cmis:isMajorVersion'] = true;
         props['cmis:isLatestMajorVersion'] = true;
-        props['cmis:versionLabel'] = '1.0';
-        props['cmis:isVersionSeriesCheckedOut'] = false;
+        props['cmis:versionLabel'] = getVersionLabel(item);
+        props['cmis:isVersionSeriesCheckedOut'] = isCheckedOut(item);
     }
 
     // Parent folder ID
@@ -133,15 +164,16 @@ export function mapDriveItemToSuccinctProperties(item: DriveItem): SuccinctPrope
 export function mapDriveItemToObjectData(
     item: DriveItem,
     succinct: boolean = true,
-    includeAllowableActions: boolean = false
+    includeAllowableActions: boolean = false,
+    isRoot: boolean = false
 ): ObjectData {
     const objectData: ObjectData = {
         // Always include full properties - cmislib needs this
-        properties: mapDriveItemToProperties(item),
+        properties: mapDriveItemToProperties(item, isRoot),
     };
 
     if (succinct) {
-        objectData.succinctProperties = mapDriveItemToSuccinctProperties(item);
+        objectData.succinctProperties = mapDriveItemToSuccinctProperties(item, isRoot);
     }
 
     if (includeAllowableActions) {
@@ -171,8 +203,11 @@ export function mapDriveItemToAllowableActions(item: DriveItem): Record<string, 
 
     if (isFolder) {
         actions['canGetChildren'] = true;
-        actions['canGetDescendants'] = true;
-        actions['canGetFolderTree'] = true;
+        // descendants/folderTree selectors are not implemented by this
+        // adapter (they return notSupported), so these must not be
+        // advertised as available.
+        actions['canGetDescendants'] = false;
+        actions['canGetFolderTree'] = false;
         actions['canCreateDocument'] = true;
         actions['canCreateFolder'] = true;
         actions['canDeleteTree'] = !isRoot;
@@ -180,12 +215,12 @@ export function mapDriveItemToAllowableActions(item: DriveItem): Record<string, 
     } else {
         actions['canGetContentStream'] = true;
         actions['canSetContentStream'] = true;
-        actions['canDeleteContentStream'] = true;
-        actions['canGetAllVersions'] = true;
+        // No route dispatches a deleteContent action or the `versions`
+        // selector, so these must not be advertised as available.
+        actions['canDeleteContentStream'] = false;
+        actions['canGetAllVersions'] = false;
         // Backed by Graph's checkout/checkin/discardCheckout driveItem
-        // actions. We don't track checked-out state server-side (Graph's
-        // base driveItem shape doesn't expose it), so these are always
-        // advertised as available for documents.
+        // actions, which are implemented.
         actions['canCheckOut'] = true;
         actions['canCancelCheckOut'] = true;
         actions['canCheckIn'] = true;

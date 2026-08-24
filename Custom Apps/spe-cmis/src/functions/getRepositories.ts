@@ -62,12 +62,17 @@ export async function getRepositories(
     context.log(`Query params: skipCount=${params.skipCount}, maxItems=${params.maxItems}, filter=${params.filter}`);
 
     try {
-        // Fetch containers from Graph API using user's token
+        // When a name filter is specified, Graph paging (skip/top) can't be
+        // applied server-side because filterContainersByName runs
+        // client-side afterward - applying Graph's skip/top first would
+        // page over the UNFILTERED set, silently dropping or misplacing
+        // matches. Fetch the complete container list in that case and page
+        // the filtered results ourselves instead.
         const graphResult = await getContainers(
             graphAccessToken,
             containerTypeId,
-            params.skipCount,
-            params.maxItems
+            params.filter ? undefined : params.skipCount,
+            params.filter ? undefined : params.maxItems
         );
 
         if (!graphResult.success) {
@@ -84,9 +89,13 @@ export async function getRepositories(
         // Get containers from response
         let containers = graphResult.data?.value || [];
 
-        // Apply client-side filter if specified
+        // Apply client-side filter, then apply paging ourselves since Graph
+        // couldn't do it for us above.
         if (params.filter) {
             containers = filterContainersByName(containers, params.filter);
+            const start = params.skipCount || 0;
+            const end = params.maxItems !== undefined ? start + params.maxItems : undefined;
+            containers = containers.slice(start, end);
         }
 
         // Build the base URL for rootFolderUrl

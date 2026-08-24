@@ -4,8 +4,8 @@
  * Maps SharePoint Embedded containers to CMIS repositories.
  */
 
-import type { FileStorageContainer, Drive } from '@microsoft/microsoft-graph-types';
-import { RepositoryInfo, RepositoryCapabilities, GetRepositoriesResponse } from '../types/cmis';
+import type { FileStorageContainer } from '@microsoft/microsoft-graph-types';
+import { RepositoryInfo, RepositoryCapabilities, AclCapabilities, GetRepositoriesResponse } from '../types/cmis';
 
 /**
  * Default CMIS capabilities for SPE-backed repositories.
@@ -16,18 +16,51 @@ export const DEFAULT_CAPABILITIES: RepositoryCapabilities = {
     capabilityContentStreamUpdatability: 'anytime',
     capabilityChanges: 'none',                    // Change log not supported in MVP
     capabilityRenditions: 'none',                 // Renditions not supported in MVP
-    capabilityGetDescendants: true,
-    capabilityGetFolderTree: true,
+    // The descendants/folderTree cmisselectors aren't implemented (routes
+    // return notSupported for them), so these must be false.
+    capabilityGetDescendants: false,
+    capabilityGetFolderTree: false,
     capabilityMultifiling: false,                 // SPE doesn't support multi-filing
     capabilityUnfiling: false,                    // SPE doesn't support unfiling
     capabilityVersionSpecificFiling: false,
     capabilityPWCSearchable: false,
     capabilityPWCUpdatable: true,
     capabilityAllVersionsSearchable: false,
-    capabilityOrderBy: 'common',
+    // orderBy is never honored by cmis/query.ts, so this can't claim 'common'.
+    capabilityOrderBy: 'none',
     capabilityQuery: 'metadataonly',              // Simple name-based query only (see cmis/query.ts)
     capabilityJoin: 'none',
     capabilityACL: 'manage',                      // Can both read and manage ACLs (see cmis/aclMapper.ts)
+};
+
+/**
+ * ACL capabilities advertised alongside capabilityACL: 'manage'. Reflects
+ * the simplified two-permission (read/write) model implemented by
+ * cmis/aclMapper.ts - Graph's sharing model doesn't support a richer
+ * permission scheme or per-object propagation control.
+ */
+export const DEFAULT_ACL_CAPABILITIES: AclCapabilities = {
+    supportedPermissions: 'basic',
+    propagation: 'repositorydetermined',
+    permissions: [
+        { permission: 'cmis:read', description: 'Read access' },
+        { permission: 'cmis:write', description: 'Read and write access' },
+        { permission: 'cmis:all', description: 'Full access' },
+    ],
+    permissionMapping: [
+        { key: 'canGetProperties.Object', permission: ['cmis:read'] },
+        { key: 'canGetACL.Object', permission: ['cmis:read'] },
+        { key: 'canGetContentStream.Object', permission: ['cmis:read'] },
+        { key: 'canGetChildren.Folder', permission: ['cmis:read'] },
+        { key: 'canCreateDocument.Folder', permission: ['cmis:write'] },
+        { key: 'canCreateFolder.Folder', permission: ['cmis:write'] },
+        { key: 'canDeleteObject.Object', permission: ['cmis:write'] },
+        { key: 'canDeleteTree.Folder', permission: ['cmis:write'] },
+        { key: 'canSetContentStream.Object', permission: ['cmis:write'] },
+        { key: 'canUpdateProperties.Object', permission: ['cmis:write'] },
+        { key: 'canMoveObject.Object', permission: ['cmis:write'] },
+        { key: 'canApplyACL.Object', permission: ['cmis:all'] },
+    ],
 };
 
 /**
@@ -44,17 +77,18 @@ export const PRODUCT_INFO = {
  * Maps an SPE container to a CMIS RepositoryInfo object.
  * 
  * @param container - The SharePoint Embedded container
- * @param drive - The container's drive (optional, used to get root folder ID)
+ * @param rootFolderId - The container drive's actual root item ID. When
+ * omitted, falls back to the well-known 'root' alias that all routes in
+ * this adapter also accept - used for bulk discovery (mapContainersToRepositories)
+ * where fetching every container's drive root would be an extra Graph call
+ * per repository.
  * @param baseUrl - Base URL for constructing rootFolderUrl
  */
 export function mapContainerToRepository(
     container: FileStorageContainer,
-    drive?: Drive,
+    rootFolderId: string = 'root',
     baseUrl?: string
 ): RepositoryInfo {
-    // The root folder ID is either from the drive's root, or we construct it
-    // In SPE, the root is typically the drive's root item ID
-    const rootFolderId = drive?.root?.id || 'root';
     const repositoryId = container.id!;
 
     return {
@@ -75,6 +109,7 @@ export function mapContainerToRepository(
         principalIdAnonymous: 'anonymous',
         principalIdAnyone: 'anyone',
         capabilities: DEFAULT_CAPABILITIES,
+        aclCapabilities: DEFAULT_ACL_CAPABILITIES,
     };
 }
 
@@ -93,7 +128,7 @@ export function mapContainersToRepositories(
     const repositories: GetRepositoriesResponse = {};
 
     for (const container of containers) {
-        const repository = mapContainerToRepository(container, undefined, baseUrl);
+        const repository = mapContainerToRepository(container, 'root', baseUrl);
         repositories[repository.repositoryId] = repository;
     }
 

@@ -19,6 +19,7 @@ import {
     moveDriveItem,
     setFileContent,
     getDriveItem,
+    listChildren,
     checkoutDriveItem,
     checkinDriveItem,
     discardCheckoutDriveItem,
@@ -33,6 +34,8 @@ import {
     objectNotFound,
     permissionDenied,
     invalidArgument,
+    constraintViolation,
+    versioningError,
     runtimeError,
 } from './errors';
 
@@ -58,6 +61,9 @@ function getPropertyValue(formData: Map<string, string>, propertyId: string): st
 
 /**
  * Handles cmisaction=delete: deletes a single object by objectId.
+ * Per CMIS spec, `delete` (unlike `deleteTree`) must fail with a constraint
+ * violation if the target is a non-empty folder - it does not recursively
+ * delete descendants.
  */
 export async function handleDeleteAction(
     formData: Map<string, string>,
@@ -67,6 +73,24 @@ export async function handleDeleteAction(
     const objectId = formData.get('objectId');
     if (!objectId) {
         return invalidArgument('objectId is required');
+    }
+
+    const itemResult = await getDriveItem(accessToken, repositoryId, objectId);
+    if (!itemResult.success) {
+        if (itemResult.statusCode === 404) {
+            return objectNotFound(`Object '${objectId}' not found`);
+        }
+        if (itemResult.statusCode === 403 || itemResult.statusCode === 401) {
+            return permissionDenied('Access denied');
+        }
+        return runtimeError(itemResult.error?.message);
+    }
+
+    if (itemResult.data?.folder) {
+        const childrenResult = await listChildren(accessToken, repositoryId, objectId, 1, 0);
+        if (childrenResult.success && (childrenResult.data?.value?.length || 0) > 0) {
+            return constraintViolation(`Folder '${objectId}' is not empty; use deleteTree to remove it and its descendants`);
+        }
     }
 
     const result = await deleteDriveItem(accessToken, repositoryId, objectId);
@@ -236,8 +260,8 @@ export async function handleSetContentAction(
  * Handles cmisaction=checkOut: checks out a document via Graph, preventing
  * other users from editing it until it's checked back in. Since SPE/Graph
  * doesn't create a separate PWC object (unlike some CMIS repositories),
- * this returns the same object, with the checked-out properties overridden
- * to reflect the (client-side-known) new state.
+ * this returns the same object; the checked-out state is reflected via
+ * Graph's `publication` facet (see objectMapper.ts).
  */
 export async function handleCheckOutAction(
     formData: Map<string, string>,
@@ -266,10 +290,10 @@ export async function handleCheckOutAction(
     }
 
     const objectData = mapDriveItemToObjectData(itemResult.data!, true, false);
-    // Reflect the checkout we just performed - Graph's base driveItem shape
-    // doesn't expose checked-out state, so we set this from known context.
+    // cmis:isVersionSeriesCheckedOut is derived from Graph's publication
+    // facet by the mapper; we additionally surface the checked-out-by id,
+    // which Graph doesn't map onto any existing CMIS property.
     if (objectData.succinctProperties) {
-        objectData.succinctProperties['cmis:isVersionSeriesCheckedOut'] = true;
         objectData.succinctProperties['cmis:versionSeriesCheckedOutId'] = objectId;
     }
 
@@ -314,7 +338,9 @@ export async function handleCancelCheckOutAction(
 /**
  * Handles cmisaction=checkin: checks in a previously checked-out document
  * via Graph, optionally updating its content and/or properties (e.g.
- * cmis:name) beforehand.
+ * cmis:name) beforehand. Verifies the object is actually checked out first,
+ * so a doomed check-in can't leave behind partially-applied content/name
+ * changes on a document that was never a PWC.
  */
 export async function handleCheckInAction(
     formData: Map<string, string>,
@@ -326,6 +352,20 @@ export async function handleCheckInAction(
     const objectId = formData.get('objectId');
     if (!objectId) {
         return invalidArgument('objectId is required');
+    }
+
+    const itemResult = await getDriveItem(accessToken, repositoryId, objectId);
+    if (!itemResult.success) {
+        if (itemResult.statusCode === 404) {
+            return objectNotFound(`Object '${objectId}' not found`);
+        }
+        if (itemResult.statusCode === 403 || itemResult.statusCode === 401) {
+            return permissionDenied('Access denied');
+        }
+        return runtimeError(itemResult.error?.message);
+    }
+    if (itemResult.data?.publication?.level !== 'checkout') {
+        return versioningError(`Object '${objectId}' is not checked out`);
     }
 
     if (fileContent) {
@@ -355,15 +395,15 @@ export async function handleCheckInAction(
         return runtimeError(checkinResult.error?.message);
     }
 
-    const itemResult = await getDriveItem(accessToken, repositoryId, objectId);
-    if (!itemResult.success) {
-        return runtimeError(itemResult.error?.message);
+    const finalItemResult = await getDriveItem(accessToken, repositoryId, objectId);
+    if (!finalItemResult.success) {
+        return runtimeError(finalItemResult.error?.message);
     }
 
     return {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
-        jsonBody: mapDriveItemToObjectData(itemResult.data!, true, false),
+        jsonBody: mapDriveItemToObjectData(finalItemResult.data!, true, false),
     };
 }
 

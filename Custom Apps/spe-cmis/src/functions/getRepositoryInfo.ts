@@ -2,7 +2,7 @@ import { app, HttpRequest, HttpResponseInit, InvocationContext } from "@azure/fu
 import {
     authenticateRequest,
     getContainer,
-    getContainerDrive,
+    getDriveRoot,
     mapContainerToRepository,
     unauthorized,
     objectNotFound,
@@ -136,21 +136,26 @@ export async function getRepositoryInfo(
             };
         }
 
-        // Optionally fetch the drive to get the root folder ID
-        let drive;
-        const driveResult = await getContainerDrive(graphAccessToken, repositoryId);
-        if (driveResult.success) {
-            drive = driveResult.data;
+        // Fetch the drive's actual root item ID. Drive responses don't embed
+        // `.root` by default, so a dedicated call is needed - without it,
+        // rootFolderId would fall back to the 'root' alias, which wouldn't
+        // match the real cmis:objectId returned by a subsequent GET of that
+        // folder.
+        let rootFolderId = 'root';
+        const rootResult = await getDriveRoot(graphAccessToken, repositoryId);
+        if (rootResult.success && rootResult.data?.id) {
+            rootFolderId = rootResult.data.id;
         } else {
-            context.log(`Could not fetch drive for container ${repositoryId}: ${driveResult.error?.message}`);
-            // Continue without drive info - we'll use a default root folder ID
+            context.log(`Could not fetch drive root for container ${repositoryId}: ${rootResult.error?.message}`);
+            // Continue with the 'root' alias - all routes in this adapter
+            // also accept it, so the repository remains fully usable.
         }
 
         // Build the base URL for rootFolderUrl
         const baseUrl = buildBaseUrl(request);
 
         // Map to CMIS repository format
-        const repositoryInfo = mapContainerToRepository(container, drive, baseUrl);
+        const repositoryInfo = mapContainerToRepository(container, rootFolderId, baseUrl);
 
         context.log(`Returning repository info for ${repositoryId}, rootFolderUrl=${repositoryInfo.rootFolderUrl}`);
 
@@ -199,6 +204,15 @@ async function postRepositoryInfo(
         return unauthorized(authResult.error);
     }
 
+    const containerTypeId = request.params.containerTypeId;
+    if (!containerTypeId) {
+        return objectNotFound('Container type ID is required');
+    }
+
+    if (!isValidGuid(containerTypeId)) {
+        return invalidArgument('Container type ID must be a valid GUID');
+    }
+
     const repositoryId = request.params.repositoryId;
     if (!repositoryId) {
         return objectNotFound('Repository ID is required');
@@ -206,6 +220,23 @@ async function postRepositoryInfo(
 
     if (!isValidRepositoryId(repositoryId)) {
         return invalidArgument('Repository ID has an invalid format');
+    }
+
+    // Verify the repository exists and belongs to the container type -
+    // otherwise a caller could execute repository-level actions (e.g.
+    // query) against a repository outside the container type in the URL.
+    const containerResult = await getContainer(authResult.context.graphAccessToken, repositoryId);
+    if (!containerResult.success) {
+        if (containerResult.statusCode === 404) {
+            return objectNotFound(`Repository '${repositoryId}' not found`);
+        }
+        if (containerResult.statusCode === 403 || containerResult.statusCode === 401) {
+            return permissionDenied('Access denied to repository');
+        }
+        return runtimeError(containerResult.error?.message);
+    }
+    if (containerResult.data?.containerTypeId !== containerTypeId) {
+        return objectNotFound(`Repository '${repositoryId}' not found in this container type`);
     }
 
     let cmisaction: string | null = request.query.get('cmisaction');
@@ -219,7 +250,7 @@ async function postRepositoryInfo(
         parsed.fields.forEach((value, key) => formData.set(key, value));
     } else if (contentType.includes('application/x-www-form-urlencoded')) {
         const body = await request.text();
-        context.log(`Body (len=${body.length}): ${body.substring(0, 500)}`);
+        context.log(`Body length: ${body.length}`);
         const params = new URLSearchParams(body);
         cmisaction = params.get('cmisaction') || cmisaction;
         params.forEach((value, key) => formData.set(key, value));

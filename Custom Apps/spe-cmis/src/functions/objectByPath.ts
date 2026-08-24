@@ -89,6 +89,9 @@ export async function objectByPath(
         if (containerResult.statusCode === 404) {
             return objectNotFound(`Repository '${repositoryId}' not found`);
         }
+        if (containerResult.statusCode === 403 || containerResult.statusCode === 401) {
+            return permissionDenied('Access denied to repository');
+        }
         return runtimeError(containerResult.error?.message);
     }
     if (containerResult.data?.containerTypeId !== containerTypeId) {
@@ -146,7 +149,7 @@ async function handleGet(
 
     switch (cmisselector) {
         case 'object':
-            return handleGetObject(accessToken, repositoryId, path, succinct, includeAllowableActions);
+            return handleGetObject(accessToken, repositoryId, path, succinct, includeAllowableActions, includeACL);
 
         case 'children':
             return handleGetChildren(request, accessToken, repositoryId, path, succinct, includeAllowableActions);
@@ -182,7 +185,7 @@ async function handleGetObjectById(
         return runtimeError(result.error?.message);
     }
 
-    const objectData = mapDriveItemToObjectData(result.data!, succinct, includeAllowableActions);
+    const objectData = mapDriveItemToObjectData(result.data!, succinct, includeAllowableActions, objectId === 'root');
 
     if (includeACL) {
         const acl = await fetchObjectAcl(accessToken, repositoryId, objectId);
@@ -295,7 +298,8 @@ async function handleGetObject(
     repositoryId: string,
     path: string,
     succinct: boolean,
-    includeAllowableActions: boolean
+    includeAllowableActions: boolean,
+    includeACL: boolean = false
 ): Promise<HttpResponseInit> {
     const result = await getDriveItemByPath(accessToken, repositoryId, path);
 
@@ -309,7 +313,16 @@ async function handleGetObject(
         return runtimeError(result.error?.message);
     }
 
-    const objectData = mapDriveItemToObjectData(result.data!, succinct, includeAllowableActions);
+    const isRoot = !path || path === '' || path === '/';
+    const objectData = mapDriveItemToObjectData(result.data!, succinct, includeAllowableActions, isRoot);
+
+    if (includeACL) {
+        const acl = await fetchObjectAcl(accessToken, repositoryId, result.data!.id!);
+        if (acl) {
+            objectData.acl = acl;
+            objectData.exactACL = true;
+        }
+    }
 
     return {
         status: 200,
@@ -446,7 +459,7 @@ async function handlePost(
         // Handle URL-encoded form data
         context.log('Parsing URL-encoded form data...');
         const body = await request.text();
-        context.log(`Body (len=${body.length}): ${body.substring(0, 500)}`);
+        context.log(`Body length: ${body.length}`);
         const params = new URLSearchParams(body);
         cmisaction = params.get('cmisaction') || cmisaction;
         params.forEach((value, key) => formData.set(key, value));

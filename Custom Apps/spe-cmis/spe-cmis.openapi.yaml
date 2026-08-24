@@ -13,7 +13,7 @@ info:
     Endpoints or actions tagged with `x-mvp: false` are NOT part of the initial MVP
     and may return a CMIS-compliant "notSupported" error until implemented.
 
-    Spec finalization checklist (all items complete):
+    TODO (Spec Finalization Checklist):
       [x] Container Type included in server path (before /cmis/browser)
       [x] Explicit repositoryId contract documented
       [x] Repository discovery paging & filtering defined
@@ -44,9 +44,11 @@ components:
           authorizationUrl: https://login.microsoftonline.com/common/oauth2/v2.0/authorize
           tokenUrl: https://login.microsoftonline.com/common/oauth2/v2.0/token
           scopes:
-            cmis.read: Read CMIS content
-            cmis.write: Write CMIS content
-            cmis.admin: CMIS administrative operations
+            access_as_user: >-
+              Access the CMIS adapter as the signed-in user. This is the only
+              delegated scope actually exposed by the server's Entra app
+              registration (see docs/SETUP_AZURE.md, "Expose an API") - the
+              adapter does not implement separate read/write/admin scopes.
 
   schemas:
     # -----------------------------
@@ -157,7 +159,7 @@ components:
         capabilityJoin:
           type: string
           enum: [none, inneronly, innerandouter]
-        capabilityAcl:
+        capabilityACL:
           type: string
           enum: [none, discover, manage]
         capabilityCreatablePropertyTypes:
@@ -316,11 +318,20 @@ components:
         objects:
           type: array
           items:
-            $ref: '#/components/schemas/ObjectData'
+            $ref: '#/components/schemas/ObjectInList'
         hasMoreItems:
           type: boolean
         numItems:
           type: integer
+
+    ObjectInList:
+      type: object
+      description: >-
+        Per CMIS 1.1 Browser Binding spec, each entry in an object list is
+        wrapped in an 'object' key rather than being the ObjectData itself.
+      properties:
+        object:
+          $ref: '#/components/schemas/ObjectData'
 
     Acl:
       type: object
@@ -330,8 +341,11 @@ components:
           items:
             type: object
             properties:
-              principalId:
-                type: string
+              principal:
+                type: object
+                properties:
+                  principalId:
+                    type: string
               permissions:
                 type: array
                 items:
@@ -349,13 +363,24 @@ components:
       properties:
         exception:
           type: string
+          description: >-
+            Matches CmisExceptionType values as actually returned by the
+            server (unprefixed) - NOT the 'cmis:' prefixed identifiers used
+            for CMIS properties/types elsewhere in this document.
           enum:
-            - cmis:notSupported
-            - cmis:permissionDenied
-            - cmis:objectNotFound
-            - cmis:invalidArgument
-            - cmis:constraint
-            - cmis:runtime
+            - constraint
+            - contentAlreadyExists
+            - filterNotValid
+            - invalidArgument
+            - nameConstraintViolation
+            - notSupported
+            - objectNotFound
+            - permissionDenied
+            - runtime
+            - storage
+            - streamNotSupported
+            - updateConflict
+            - versioning
         message:
           type: string
 
@@ -506,8 +531,11 @@ paths:
           in: query
           schema:
             type: boolean
-        - name: includeAcl
+        - name: includeACL
           in: query
+          description: >-
+            Note: query parameter names are case-sensitive in Azure
+            Functions - the implemented parameter is `includeACL`.
           schema:
             type: boolean
         - name: succinct

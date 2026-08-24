@@ -145,9 +145,15 @@ export function buildTypeChildrenResponse(typeId?: string | null): TypeDefinitio
 
 /**
  * Builds the response for cmisselector=typeDescendants.
- * Since there are no custom subtypes, each base type is a leaf node.
+ * Per CMIS 1.1 spec, this returns descendants BENEATH the given type, not
+ * the type itself. Since neither base type has any custom subtypes, both
+ * are leaves: passing a typeId (matching either base type) yields an empty
+ * list, and omitting typeId returns the two base types as roots (with no
+ * children) - mirroring typeChildren's root-level behavior.
  */
 export function buildTypeDescendantsResponse(typeId?: string | null): TypeDefinitionContainer[] {
-    const roots = typeId ? BASE_TYPES.filter(t => t.id === typeId) : BASE_TYPES;
-    return roots.map(type => ({ type, children: [] }));
+    if (typeId) {
+        return [];
+    }
+    return BASE_TYPES.map(type => ({ type, children: [] }));
 }

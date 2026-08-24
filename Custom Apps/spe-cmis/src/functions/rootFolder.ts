@@ -86,6 +86,9 @@ export async function rootFolder(
         if (containerResult.statusCode === 404) {
             return objectNotFound(`Repository '${repositoryId}' not found`);
         }
+        if (containerResult.statusCode === 403 || containerResult.statusCode === 401) {
+            return permissionDenied('Access denied to repository');
+        }
         return runtimeError(containerResult.error?.message);
     }
     if (containerResult.data?.containerTypeId !== containerTypeId) {
@@ -164,7 +167,7 @@ async function handleGetObject(
         return runtimeError(result.error?.message);
     }
 
-    const objectData = mapDriveItemToObjectData(result.data!, succinct, includeAllowableActions);
+    const objectData = mapDriveItemToObjectData(result.data!, succinct, includeAllowableActions, objectId === 'root');
 
     if (includeACL) {
         const acl = await fetchObjectAcl(accessToken, repositoryId, objectId === 'root' ? result.data!.id! : objectId);
@@ -311,7 +314,7 @@ async function handlePost(
         // Handle URL-encoded form data
         context.log('Parsing URL-encoded form data...');
         const body = await request.text();
-        context.log(`Body (len=${body.length}): ${body.substring(0, 500)}`);
+        context.log(`Body length: ${body.length}`);
         const params = new URLSearchParams(body);
         cmisaction = params.get('cmisaction') || cmisaction;
         params.forEach((value, key) => formData.set(key, value));

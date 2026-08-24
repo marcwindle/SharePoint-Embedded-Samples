@@ -71,14 +71,15 @@ try {
         }
 
         # A placeholder containerTypeId is enough to prove the CMIS getRepositories route is
-        # wired up end to end; without real tenant credentials the call is expected to fail
-        # auth/lookup (401/403/500) rather than return CMIS repository data.
+        # wired up end to end; without an Authorization header the call must be rejected by
+        # authenticateRequest() with 401 - any other status (including 500) indicates a real
+        # problem and should fail this check rather than be treated as a pass.
         $probeUrl = 'http://127.0.0.1:7071/api/storage/fileStorage/containerTypes/00000000-0000-0000-0000-000000000000/cmis/browser'
-        [void](Wait-ForHttpEndpoint -Url $probeUrl -TimeoutSec $TimeoutSec -AllowedStatusCodes @(200, 401, 403, 500) -ProcessHandle $runtimeHandle)
+        [void](Wait-ForHttpEndpoint -Url $probeUrl -TimeoutSec $TimeoutSec -AllowedStatusCodes @(401) -ProcessHandle $runtimeHandle)
 
         Write-Step 'Capturing HTTP validation artifact'
         $artifactPath = New-ValidationArtifactPath -WorkingDirectory $appRoot -Kind 'http' -Name 'get-repositories' -Extension 'http.txt'
-        Save-HttpArtifact -ArtifactPath $artifactPath -Url $probeUrl -Method 'GET' -AllowedStatusCodes @(200, 401, 403, 500) | Out-Null
+        Save-HttpArtifact -ArtifactPath $artifactPath -Url $probeUrl -Method 'GET' -AllowedStatusCodes @(401) | Out-Null
     }
 
     # Python CMIS client scripts (tests/) exercise the full stack against a

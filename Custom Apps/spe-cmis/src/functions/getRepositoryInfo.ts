@@ -1,0 +1,261 @@
+import { app, HttpRequest, HttpResponseInit, InvocationContext } from "@azure/functions";
+import {
+    authenticateRequest,
+    getContainer,
+    getContainerDrive,
+    mapContainerToRepository,
+    unauthorized,
+    objectNotFound,
+    permissionDenied,
+    runtimeError,
+    notSupported,
+    invalidArgument,
+    buildTypeChildrenResponse,
+    buildTypeDescendantsResponse,
+    getBaseTypeDefinition,
+    executeCmisQuery,
+    parseMultipartForm,
+} from "../lib";
+
+/**
+ * CMIS Browser Binding: Get Repository Info
+ * 
+ * Returns information about a specific repository (SPE container).
+ * Per CMIS 1.1 Browser Binding spec section 5.2.2.
+ * 
+ * URL Pattern: /storage/fileStorage/containerTypes/{containerTypeId}/cmis/browser/{repositoryId}
+ * Method: GET
+ */
+export async function getRepositoryInfo(
+    request: HttpRequest,
+    context: InvocationContext
+): Promise<HttpResponseInit> {
+    context.log(`CMIS getRepositoryInfo request for url "${request.url}"`);
+
+    // Authenticate the request and get Graph token with user context
+    const authResult = await authenticateRequest(request);
+    if (!authResult.success || !authResult.context) {
+        context.log(`Authentication failed: ${authResult.error}`);
+        return unauthorized(authResult.error);
+    }
+
+    const { graphAccessToken } = authResult.context;
+    context.log(`Authenticated principal: ${authResult.context.principalId}`);
+
+    // Extract parameters from the route
+    const containerTypeId = request.params.containerTypeId;
+    const repositoryId = request.params.repositoryId;
+
+    if (!containerTypeId) {
+        context.log('Missing containerTypeId in route');
+        return permissionDenied('Container type ID is required');
+    }
+
+    if (!repositoryId) {
+        context.log('Missing repositoryId in route');
+        return objectNotFound('Repository ID is required');
+    }
+
+    try {
+        // Fetch the container from Graph API using user's token
+        const containerResult = await getContainer(graphAccessToken, repositoryId);
+
+        if (!containerResult.success) {
+            context.log(`Graph API error: ${JSON.stringify(containerResult.error)}`);
+
+            // Map Graph errors to CMIS errors
+            if (containerResult.statusCode === 404) {
+                return objectNotFound(`Repository '${repositoryId}' not found`);
+            }
+            if (containerResult.statusCode === 403 || containerResult.statusCode === 401) {
+                return permissionDenied('Access denied to repository');
+            }
+
+            return runtimeError(containerResult.error?.message || 'Failed to retrieve repository');
+        }
+
+        const container = containerResult.data!;
+
+        // Verify the container belongs to the expected container type
+        if (container.containerTypeId !== containerTypeId) {
+            context.log(`Container ${repositoryId} belongs to container type ${container.containerTypeId}, not ${containerTypeId}`);
+            return objectNotFound(`Repository '${repositoryId}' not found in this container type`);
+        }
+
+        // Type Definition selectors (typeChildren/typeDescendants/typeDefinition)
+        // are static and repository-independent (this adapter has no custom
+        // subtypes), but are still served from the repository URL per CMIS 1.1
+        // Browser Binding spec sections 5.2.3-5.2.5.
+        const cmisselector = request.query.get('cmisselector');
+        const typeId = request.query.get('typeId');
+        if (cmisselector === 'typeChildren') {
+            return {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+                jsonBody: buildTypeChildrenResponse(typeId),
+            };
+        }
+        if (cmisselector === 'typeDescendants') {
+            return {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+                jsonBody: buildTypeDescendantsResponse(typeId),
+            };
+        }
+        if (cmisselector === 'typeDefinition') {
+            if (!typeId) {
+                return invalidArgument('typeId is required for cmisselector=typeDefinition');
+            }
+            const typeDefinition = getBaseTypeDefinition(typeId);
+            if (!typeDefinition) {
+                return objectNotFound(`Type '${typeId}' not found`);
+            }
+            return {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+                jsonBody: typeDefinition,
+            };
+        }
+
+        // Optionally fetch the drive to get the root folder ID
+        let drive;
+        const driveResult = await getContainerDrive(graphAccessToken, repositoryId);
+        if (driveResult.success) {
+            drive = driveResult.data;
+        } else {
+            context.log(`Could not fetch drive for container ${repositoryId}: ${driveResult.error?.message}`);
+            // Continue without drive info - we'll use a default root folder ID
+        }
+
+        // Build the base URL for rootFolderUrl
+        const baseUrl = buildBaseUrl(request);
+
+        // Map to CMIS repository format
+        const repositoryInfo = mapContainerToRepository(container, drive, baseUrl);
+
+        context.log(`Returning repository info for ${repositoryId}, rootFolderUrl=${repositoryInfo.rootFolderUrl}`);
+
+        return {
+            status: 200,
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            jsonBody: repositoryInfo,
+        };
+
+    } catch (error) {
+        context.error('Unexpected error in getRepositoryInfo:', error);
+        return runtimeError('An unexpected error occurred');
+    }
+}
+
+/**
+ * Builds the base URL for CMIS Browser Binding URLs
+ */
+function buildBaseUrl(request: HttpRequest): string {
+    const url = new URL(request.url);
+    // Remove the /{repositoryId} segment to get the base browser binding URL
+    // URL is: .../cmis/browser/{repositoryId}
+    // We want: .../cmis/browser
+    const basePath = url.pathname.replace(/\/[^/]+$/, '');
+    return `${url.protocol}//${url.host}${basePath}`;
+}
+
+/**
+ * CMIS Browser Binding: Repository-level actions (POST)
+ *
+ * Supports cmisaction=query (see cmis/query.ts for the supported subset of
+ * CMIS SQL). All other repository-level cmisactions (createType, updateType,
+ * deleteType, etc.) are not implemented by this adapter and return a proper
+ * CMIS 'notSupported' (405) response instead of a generic 404.
+ */
+async function postRepositoryInfo(
+    request: HttpRequest,
+    context: InvocationContext
+): Promise<HttpResponseInit> {
+    context.log(`CMIS repository-level POST request for url "${request.url}"`);
+
+    const authResult = await authenticateRequest(request);
+    if (!authResult.success || !authResult.context) {
+        return unauthorized(authResult.error);
+    }
+
+    const repositoryId = request.params.repositoryId;
+    if (!repositoryId) {
+        return objectNotFound('Repository ID is required');
+    }
+
+    let cmisaction: string | null = request.query.get('cmisaction');
+    const formData = new Map<string, string>();
+
+    const contentType = request.headers.get('content-type') || '';
+    context.log(`POST content-type: ${contentType}, content-length: ${request.headers.get('content-length')}, transfer-encoding: ${request.headers.get('transfer-encoding')}`);
+    if (contentType.includes('multipart/form-data')) {
+        const parsed = await parseMultipartForm(request, context);
+        cmisaction = parsed.fields.get('cmisaction') || cmisaction;
+        parsed.fields.forEach((value, key) => formData.set(key, value));
+    } else if (contentType.includes('application/x-www-form-urlencoded')) {
+        const body = await request.text();
+        context.log(`Body (len=${body.length}): ${body.substring(0, 500)}`);
+        const params = new URLSearchParams(body);
+        cmisaction = params.get('cmisaction') || cmisaction;
+        params.forEach((value, key) => formData.set(key, value));
+    }
+
+    if (!cmisaction) {
+        return invalidArgument('cmisaction is required');
+    }
+
+    if (cmisaction === 'query') {
+        // OASIS spec field is 'q'; some clients (e.g. OpenCMIS Workbench) send 'statement' instead.
+        const statement = formData.get('q') || formData.get('statement') || request.query.get('q') || request.query.get('statement');
+        if (!statement) {
+            return invalidArgument("'q' (the query statement) is required");
+        }
+
+        const maxItems = parseInt(formData.get('maxItems') || request.query.get('maxItems') || '100', 10);
+        const skipCount = parseInt(formData.get('skipCount') || request.query.get('skipCount') || '0', 10);
+
+        const result = await executeCmisQuery(
+            statement,
+            authResult.context.graphAccessToken,
+            repositoryId,
+            maxItems,
+            skipCount
+        );
+
+        if (!result.success || !result.queryResults) {
+            return notSupported(result.error || 'Query failed');
+        }
+
+        return {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+            jsonBody: result.queryResults,
+        };
+    }
+
+    context.log(`Repository-level cmisaction=${cmisaction} is not supported`);
+    return notSupported(`Repository-level action '${cmisaction}' is not supported`);
+}
+
+/**
+ * Dispatches GET (repository info) vs POST (repository-level actions).
+ */
+async function repositoryInfoHandler(
+    request: HttpRequest,
+    context: InvocationContext
+): Promise<HttpResponseInit> {
+    if (request.method === 'POST') {
+        return postRepositoryInfo(request, context);
+    }
+    return getRepositoryInfo(request, context);
+}
+
+// Register the Azure Function
+app.http('getRepositoryInfo', {
+    methods: ['GET', 'POST'],
+    authLevel: 'anonymous',
+    route: 'storage/fileStorage/containerTypes/{containerTypeId}/cmis/browser/{repositoryId}',
+    handler: repositoryInfoHandler
+});

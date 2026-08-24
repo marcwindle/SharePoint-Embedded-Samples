@@ -6,7 +6,7 @@ export {
     type AuthContext,
     type AuthResult,
     authenticateRequest,
-    clearTokenCache,
+    clearMsalClientCache,
     parseBasicAuth,
     parseBearerToken,
 } from './authService';

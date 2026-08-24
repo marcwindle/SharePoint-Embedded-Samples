@@ -111,7 +111,14 @@ export function parseBearerToken(request: HttpRequest): string | null {
 /**
  * Acquires a Graph token using ROPC flow (for Basic Auth clients).
  * The token will have the user's identity, enabling SPE access control.
- * 
+ *
+ * ROPC (sending a raw username/password to the token endpoint) is generally
+ * discouraged, but it's integral to this adapter's purpose: bridging legacy
+ * CMIS clients (e.g. SAP Document Center) that only support HTTP Basic Auth
+ * and have no way to complete an interactive/OAuth2 flow. Clients that CAN
+ * send an OAuth2 Bearer token should do so instead - see
+ * acquireTokenOnBehalfOf and the Bearer-first ordering in authenticateRequest.
+ *
  * Note: ROPC requires the user's tenant to allow it and the app to have
  * the appropriate permissions. It won't work with MFA-enabled accounts.
  */
@@ -160,9 +167,12 @@ async function acquireTokenOnBehalfOf(
 }
 
 /**
- * Clears the MSAL client cache. Useful for testing or forcing re-authentication.
+ * Clears the server-side cached MSAL ConfidentialClientApplication instance,
+ * forcing it to be recreated (picking up updated config) on next use. This
+ * runs entirely in the API service - there is no browser involved in this
+ * adapter, so this has no effect on any browser-side token cache.
  */
-export function clearTokenCache(): void {
+export function clearMsalClientCache(): void {
     msalClient = null;
 }
 
@@ -180,7 +190,32 @@ export interface AuthResult {
  * Returns an AuthResult with the user's Graph access token for subsequent API calls.
  */
 export async function authenticateRequest(request: HttpRequest): Promise<AuthResult> {
-    // Try Basic Auth first (common for legacy CMIS clients)
+    // Prefer OAuth2 Bearer tokens (OBO) over Basic Auth (ROPC) when a client
+    // can send either, since ROPC involves passing raw user credentials.
+    const bearerToken = parseBearerToken(request);
+    if (bearerToken) {
+        try {
+            const result = await acquireTokenOnBehalfOf(bearerToken);
+
+            return {
+                success: true,
+                context: {
+                    principalId: result.account?.localAccountId || 'oauth2-user',
+                    principalName: result.account?.name,
+                    authMethod: 'oauth2',
+                    graphAccessToken: result.accessToken,
+                },
+            };
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Token exchange failed';
+            return {
+                success: false,
+                error: `OAuth2 OBO failed: ${message}`,
+            };
+        }
+    }
+
+    // Fall back to Basic Auth (legacy CMIS clients that can't do OAuth2)
     const basicAuth = parseBasicAuth(request);
     if (basicAuth) {
         try {
@@ -203,30 +238,6 @@ export async function authenticateRequest(request: HttpRequest): Promise<AuthRes
             return {
                 success: false,
                 error: `Basic Auth failed: ${message}`,
-            };
-        }
-    }
-
-    // Try Bearer token (OAuth2)
-    const bearerToken = parseBearerToken(request);
-    if (bearerToken) {
-        try {
-            const result = await acquireTokenOnBehalfOf(bearerToken);
-
-            return {
-                success: true,
-                context: {
-                    principalId: result.account?.localAccountId || 'oauth2-user',
-                    principalName: result.account?.name,
-                    authMethod: 'oauth2',
-                    graphAccessToken: result.accessToken,
-                },
-            };
-        } catch (error) {
-            const message = error instanceof Error ? error.message : 'Token exchange failed';
-            return {
-                success: false,
-                error: `OAuth2 OBO failed: ${message}`,
             };
         }
     }
